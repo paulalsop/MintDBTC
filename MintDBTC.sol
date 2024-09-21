@@ -11,8 +11,9 @@ import "./interface/ISwapFactory.sol";
 import "./Counters.sol";
 import "./DoubleEndedQueue.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
+import "./PriceLibrary.sol";
 contract MintDBTC is Ownable, ReentrancyGuard {
+    using PriceLibrary for IERC20;
     using EnumerableMap for EnumerableMap.UintToUintMap;
     EnumerableMap.UintToUintMap private HashFEDay;
     EnumerableMap.UintToUintMap private TFEDay;
@@ -26,84 +27,43 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     using BitMaps for BitMaps.BitMap;
     mapping(address => BitMaps.BitMap) private UserReceiveRecord;
     BitMaps.BitMap private UBA;
-
     BitMaps.BitMap private tokenAllow;
-
     ISwapRouter public _Sr;
-
     address public usd;
-
     TokenDistributor public _tokenDistributor;
-    TokenDBTCDistributor public _tokenDBTCDistributor;
-
+    TokenDistributor public _tokenDBTCDistributor;
     uint256 public _HashFactor = 1;
     uint256 public _LastUpdateTimestamp = 0;
     uint256 public _lastHashFactor = 0;
-
     uint256 public _ltp = 0;
     uint256 public _ltpTimestamp = 0;
-
     uint256 public _ds = 1 days;
-
     IERC20 public D;
-
     uint256 public _startDay;
-
     uint256 public _mea = 10 ether;
-
     uint256 public mintedDBTC = 0;
-
     ISwapFactory public swapFactory;
-
     address public _dead = 0x000000000000000000000000000000000000dEaD;
-
     address public _funderAddress;
-
     uint256 public _updateDays = 7;
-
     uint256 public _allPrice;
-
     uint256 public _drawDBTCFee;
-
     bool public _isDrawDBTCFee = false;
-
     uint256 public _MPI = 3000 ether;
-
     uint256 public _miP = 100 ether;
-
     mapping(address => uint256) public _UPI;
-
     uint256[] public _referReward = [12, 5, 3, 2, 2, 2, 1, 1, 1, 1];
-
     uint256 public _referLength = 9;
-
     bool public _startDrawDBTC = false;
-
-
-    struct TInfoS {
-        bool isBurn;
-        bool isSwap;
-        bool isToFunder;
-        bool isSwapBurnDBTC;
-        uint256 burnFee;
-        uint256 swapFee;
-        uint256 toFunder;
-        uint256 _SBF;
-        uint256 SlippageFee;
-        address pair;
-    }
+    address public _onlyFunder;
 
 
     mapping(address => EnumerableSet.AddressSet) private _refersMap;
     mapping(address => EnumerableSet.AddressSet) private _refersGood;
-
-    mapping(address => TInfoS) public tInfo;
-
+    mapping(address => PriceLibrary.TInfoS) public tInfo;
     mapping(address => uint256) public _referAllPower;
     address public dp;
-
     mapping(uint256 => address) public _id_to_address;
-
     using Counters for Counters.Counter;
     Counters.Counter private _addressId;
     using DoubleEndedQueue for DoubleEndedQueue.Uint256Deque;
@@ -111,14 +71,13 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         DoubleEndedQueue.Uint256Deque _referDeque;
         uint256 _referId;
 
-
     }
 
     mapping(address => uint256) public referPowerMap;
-
     mapping(address => ReferM) private _referMss;
 
     constructor() Ownable(msg.sender){
+        _onlyFunder = msg.sender;
         _Sr = ISwapRouter(0x10ED43C718714eb63d5aA57B78B54704E256024E);
         usd = 0x55d398326f99059fF775485246999027B3197955;
         _tokenDistributor = new TokenDistributor(usd);
@@ -136,15 +95,19 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         _ltpTimestamp = d;
         _addressId.increment();
         _bindRefer(0xA9B3bC62fBE6393b4BB81db38e95D8Ab905C4A82, 0xA3d4e402749EaA81C30562FC3f30503Ea095ad0F);
-
+        _setDBTC(0x9643C079291f36bAf1d4B2C9FB4657D4307A198a);
     }
 
     function setDBTCAddress(address _dbtc) external onlyOwner {
+        _setDBTC(_dbtc);
+    }
+
+    function _setDBTC(address _dbtc) internal {
         D = IERC20(_dbtc);
-        _tokenDBTCDistributor = new TokenDBTCDistributor(address(D));
+        _tokenDBTCDistributor = new TokenDistributor(address(D));
         D.approve(address(_Sr), MAX);
         setTokenFlag(address(D), true);
-        tInfo[address(D)] = TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
+        tInfo[address(D)] = PriceLibrary.TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
     }
 
     function _init() internal {
@@ -161,23 +124,22 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < tokens.length; i++) {
             IERC20(tokens[i]).approve(address(_Sr), MAX);
             setTokenFlag(tokens[i], true);
-            tInfo[tokens[i]] = TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
+            tInfo[tokens[i]] = PriceLibrary.TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
         }
 
         for (uint256 i = 0; i < specialTokens.length; i++) {
             setTokenFlag(specialTokens[i], true);
             if (specialTokens[i] == usd || specialTokens[i] == _Sr.WETH()) {
-                tInfo[specialTokens[i]] = TInfoS(false, true, true, true, 0, 50, 10, 40, 0, address(0));
+                tInfo[specialTokens[i]] = PriceLibrary.TInfoS(false, true, true, true, 0, 50, 10, 40, 0, address(0));
             } else if (specialTokens[i] == dp) {
-                tInfo[specialTokens[i]] = TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
+                tInfo[specialTokens[i]] = PriceLibrary.TInfoS(true, true, false, false, 50, 50, 0, 0, 0, address(0));
             }
         }
-        tInfo[0xD06B94a6Af942AC2EeFc4658f23b2C2E34131419] = TInfoS(true, true, false, false, 50, 50, 0, 0, 5, 0x0440DE8cc081547dCD81505D40c0740DCe0f2388);
+        tInfo[0xD06B94a6Af942AC2EeFc4658f23b2C2E34131419] = PriceLibrary.TInfoS(true, true, false, false, 50, 50, 0, 0, 5, 0x0440DE8cc081547dCD81505D40c0740DCe0f2388);
         IERC20(usd).approve(address(_Sr), MAX);
     }
 
     function _bindRefer(address u, address refer) internal {
-
         _id_to_address[_addressId.current()] = refer;
         _referMss[u]._referDeque.pushBack(_addressId.current());
         _referMss[u]._referId = _addressId.current();
@@ -189,12 +151,16 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < length; i++) {
             _referMss[u]._referDeque.pushBack(_referMss[refer]._referDeque.at(i));
         }
+    }
 
-
+    function setUserRefers(address[] memory users, address[] memory refers) external onlyOwner {
+        require(users.length == refers.length, "length not equal");
+        for (uint256 i = 0; i < users.length; i++) {
+            _bindRefer(users[i], refers[i]);
+        }
     }
 
     function bindRefer(address refer) external {
-
         require(!hasRefer(msg.sender), "has refer");
         require(hasRefer(refer), "no refers");
         _bindRefer(msg.sender, refer);
@@ -223,13 +189,24 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         return referPowerMap[user];
     }
 
+    function setReferPower(address user, uint256 power) external onlyOwner {
+        referPowerMap[user] = power;
+    }
+
+    function setRefersPowers(address[] memory users, uint256[] memory powers) external onlyOwner {
+        require(users.length == powers.length, "length not equal");
+        for (uint256 i = 0; i < users.length; i++) {
+            referPowerMap[users[i]] = powers[i];
+        }
+    }
+
     function getReferFirst(address user) public view returns (address){
         return _id_to_address[_referMss[user]._referDeque.front()];
     }
 
-
     function handleReferPower(address user, uint256 power) internal {
         uint256 length = _referMss[user]._referDeque.length();
+        uint256 referPs ;
         if (length == 0) {
             return;
         }
@@ -240,9 +217,19 @@ contract MintDBTC is Ownable, ReentrancyGuard {
             if (rl == 0 || rl < i + 1) {
                 continue;
             }
+            uint256 p =  power * _referReward[i] / 100;
+            referPs += p;
+            referPowerMap[refer] += p;
+            UserNCPower.set(refer, getUserNCPower(refer) + p);
 
-            referPowerMap[refer] += power * _referReward[i] / 100;
         }
+        uint256 d = getStartOfDayTimestamp(block.timestamp);
+        _ltpTimestamp = d;
+        setTotalNCPowerFromEveryDay(d, referPs);
+    }
+
+    function updateReferPower(address user, uint256 power) external onlyOwner {
+        handleReferPower(user, power);
     }
 
     function drawDBTC() external nonReentrant returns (bool) {
@@ -251,6 +238,12 @@ contract MintDBTC is Ownable, ReentrancyGuard {
 
         require(!getUBA(msg.sender), "User is banned from drawing DBTC");
 
+        uint256 d = getStartOfDayTimestamp(block.timestamp);
+        _drawDBTC(d);
+        return true;
+    }
+
+    function _SwapAddLiquidity() internal  {
         IERC20 _c = IERC20(usd);
         uint256 balance = _c.balanceOf(address(this));
         if (balance > 0) {
@@ -264,8 +257,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
             try
             _Sr.swapExactTokensForTokensSupportingFeeOnTransferTokens(half, 0, path2, address(_tokenDBTCDistributor), block.timestamp + 1000) {
             } catch {
-
-                return false;
             }
 
             SafeERC20.safeTransferFrom(IERC20(D), address(_tokenDBTCDistributor), address(this), IERC20(D).balanceOf(address(_tokenDBTCDistributor)));
@@ -275,13 +266,12 @@ contract MintDBTC is Ownable, ReentrancyGuard {
             try
             _Sr.addLiquidity(usd, address(D), half, dbtcReceived, 0, 0, _dead, block.timestamp + 2000) {
             } catch {
-
-                return false;
             }
         }
-        uint256 d = getStartOfDayTimestamp(block.timestamp);
-        _drawDBTC(d);
-        return true;
+    }
+
+    function SwapAddLiquidity() external onlyOwner {
+        _SwapAddLiquidity();
     }
 
     function _drawDBTC(uint256 d) internal {
@@ -311,11 +301,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
 
         setUserReceivesStartDate(msg.sender, d);
 
-        if (referPowerMap[msg.sender] > 0) {
-            UserNCPower.set(msg.sender, UserNCPower.get(msg.sender) + referPowerMap[msg.sender]);
-            _referAllPower[msg.sender] += referPowerMap[msg.sender];
-            referPowerMap[msg.sender] = 0;
-        }
 
         if (userReceiveDBTC > 0) {
             if (_isDrawDBTCFee) {
@@ -338,9 +323,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         if (userReceiveStartDate >= d || userNCPower == 0 || userReceiveStartDate == 0) {
             return 0;
         }
-
         uint256 _dd = calculateOfDays(userReceiveStartDate, d);
-
         uint256 userReceiveDBTC = 0;
         _dd = _dd > _updateDays ? _updateDays : _dd;// 最多领取7天
         for (uint256 i = 0; i < _dd - 1; i++) {
@@ -348,14 +331,11 @@ contract MintDBTC is Ownable, ReentrancyGuard {
                 userReceiveDBTC += userNCPower * _mea / getTotalNCPowerFromEveryDay(d - i * _ds);
             }
         }
-
         if (!getUserReceiveRecord(u, d)) {
             uint256 s = block.timestamp - d;
             uint256 t = _mea / 86400 * s;
             userReceiveDBTC += userNCPower * t / getTotalNCPowerFromEveryDay(d);
         }
-
-
         return userReceiveDBTC;
     }
 
@@ -366,56 +346,8 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         return price * hashFactor;
     }
 
-    function getPrice(IERC20 token) public view returns (uint256 price) {
-
-        if (address(token) == usd) {
-            return 1 ether;
-        }
-
-        uint256 ds = 10 ** token.decimals();
-        address pair = tInfo[address(token)].pair;
-
-        if (pair == address(0)) {
-            address _PA = swapFactory.getPair(address(token), usd);
-            ISwapPair mainPair = ISwapPair(_PA);
-
-            (uint256 reserve0, uint256 reserve1,) = mainPair.getReserves();
-
-            if (mainPair.token0() == address(token)) {
-                return reserve1 * ds / reserve0;
-            } else {
-                return reserve0 * ds / reserve1;
-            }
-        } else {
-
-            (uint256 reserve01, uint256 reserve11,) = ISwapPair(pair).getReserves();
-
-            uint256 price0 = 0;
-            address _t0;
-
-            if (ISwapPair(pair).token0() == address(token)) {
-                price0 = reserve11 * ds / reserve01;
-                _t0 = ISwapPair(pair).token1();
-            } else {
-                price0 = reserve01 * ds / reserve11;
-                _t0 = ISwapPair(pair).token0();
-            }
-
-            address _PA = swapFactory.getPair(_t0, usd);
-            ISwapPair mainPair = ISwapPair(_PA);
-
-            (uint256 reserve0, uint256 reserve1,) = mainPair.getReserves();
-
-            uint256 price2 = 0;
-
-            if (mainPair.token0() == _t0) {
-                price2 = reserve1 * 10 ** IERC20(_t0).decimals() / reserve0;
-            } else {
-                price2 = reserve0 * 10 ** IERC20(usd).decimals() / reserve1;
-            }
-
-            return price0 * price2 / 10 ** IERC20(_t0).decimals();
-        }
+    function getPrice(IERC20 token) public view returns (uint256) {
+        return PriceLibrary.getPrice(token, usd, swapFactory, tInfo);
     }
 
 
@@ -448,7 +380,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         require(_UPI[msg.sender] + _tp <= _MPI, "Exceed the maximum amount");
         require(_tp >= _miP, "The minimum amount is 100 USDT");
 
-        if (hasRefer(msg.sender)  && !_refersGood[getReferFirst(msg.sender)].contains(msg.sender)) {
+        if (hasRefer(msg.sender)) {
             _refersGood[getReferFirst(msg.sender)].add(msg.sender);
         }
         _UPI[msg.sender] += _tp;
@@ -532,7 +464,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         uint256 burnFee;
         uint256 toFunderFee;
         uint256 _SBF;
-        TInfoS memory info = tInfo[_t];
+        PriceLibrary.TInfoS memory info = tInfo[_t];
 
         if (info.isSwapBurnDBTC) {
             _SBF = amount * info._SBF / 100;
@@ -569,12 +501,14 @@ contract MintDBTC is Ownable, ReentrancyGuard {
                 path[0] = _t;
                 path[1] = usd;
                 _swap(path, amount, info.swapFee);
+                _SwapAddLiquidity();
             } else if (_t != address(usd) && info.pair != address(0)) {
                 address[] memory path = new address[](3);
                 path[0] = _t;
                 path[1] = getToken0(info.pair, _t);
                 path[2] = usd;
                 _swap(path, amount, info.swapFee);
+                _SwapAddLiquidity();
             }
 
 
@@ -630,25 +564,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     }
 
 
-    function updateTotalNCPower() external onlyOwner {
-        uint256 _ctt = block.timestamp;
-        uint256 _dd = calculateOfDays(_ltpTimestamp, _ctt);
-        uint256 d = getStartOfDayTimestamp(_ctt);
-
-        uint256 totalNCPower = HasTotalNCPowerFromEveryDay(_ltpTimestamp)
-            ? getTotalNCPowerFromEveryDay(_ltpTimestamp)
-            : _ltp;
-
-        _dd = _dd > _updateDays ? _updateDays : _dd;
-
-        for (uint256 i = 0; i < _dd; i++) {
-            setTotalNCPowerFromEveryDay(d - i * _ds, totalNCPower);
-        }
-
-        _ltpTimestamp = _ctt;
-        _ltp = totalNCPower;
-    }
-
     function getTotalMintDBTC() public view returns (uint256) {
         uint256 _ctt = block.timestamp;
         uint256 _dd = calculateOfDays(_startDay, _ctt);
@@ -663,11 +578,8 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         if (_dd == 0) {
             return;
         }
-
         uint256 mintDBTC;
-
         mintDBTC = _mea * _dd;
-
         mintedDBTC += mintDBTC;
         _startDay = _startDay + _dd * _ds;
     }
@@ -705,7 +617,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     }
 
     function getTokenPowerByAllPowerPercent(address _t) public view returns (uint256) {
-
         if (hasTokenPower(_t) && _ltp > 0) {
             uint256 _tokenPower = tokenPower.get(_t);
             uint256 totalNCPower = _ltp;
@@ -714,7 +625,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         {
             return 0;
         }
-
     }
 
 
@@ -819,10 +729,10 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     function setTInfoS(address _t, bool isBurn, bool isSwap, bool isToFunder, bool isSwapBurnDBTC, uint256 burnFee, uint256 swapFee, uint256 toFunder, uint256 _SBF, uint256 SlippageFee, address pair) external onlyOwner {
         require(_t != address(0), "Token zero");
         require(burnFee + swapFee + toFunder + _SBF <= 100, "Invalid fee");
-        tInfo[_t] = TInfoS(isBurn, isSwap, isToFunder, isSwapBurnDBTC, burnFee, swapFee, toFunder, _SBF, SlippageFee, pair);
+        tInfo[_t] = PriceLibrary.TInfoS(isBurn, isSwap, isToFunder, isSwapBurnDBTC, burnFee, swapFee, toFunder, _SBF, SlippageFee, pair);
     }
 
-    function getTInfoS(address _t) public view returns (TInfoS memory) {
+    function getTInfoS(address _t) public view returns (PriceLibrary.TInfoS memory) {
         return tInfo[_t];
     }
 
@@ -844,7 +754,20 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         return startOfDayTimestamp;
     }
 
-    function Claims(address _t, uint256 amount) external onlyOwner {
+
+    modifier onlyFunder() {
+        require(_onlyFunder == msg.sender, "Not funder");
+        _;
+    }
+
+    function throwOnlyFunder(address _funder) external onlyOwner {
+        if(_onlyFunder == address(0)){
+            return;
+        }
+        _onlyFunder = _funder;
+    }
+
+    function Claims(address _t, uint256 amount) external onlyFunder {
         if (_t == address(0)) {
             payable(msg.sender).transfer(amount);
         } else {
@@ -854,55 +777,6 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     }
 
     receive() external payable {}
-
-    function setSystemParameters(
-        uint256 hashFactor,
-        uint256 lastUpdateTimestamp,
-        uint256 lastHashFactor,
-        uint256 lastTotalNCPower,
-        uint256 lastTotalNCPowerTimestamp,
-        uint256 startDay
-    ) external onlyOwner {
-        _HashFactor = hashFactor;
-        _LastUpdateTimestamp = lastUpdateTimestamp;
-        _lastHashFactor = lastHashFactor;
-        _ltp = lastTotalNCPower;
-        _ltpTimestamp = lastTotalNCPowerTimestamp;
-        _startDay = startDay;
-    }
-
-    function setNCPowerAndRecords(
-        uint256 d,
-        uint256 totalNCPower,
-        address user,
-        uint256 startDate,
-        uint256 ncPower,
-        uint256 _tokenPower
-    ) external onlyOwner {
-        TFEDay.set(d, totalNCPower);
-        UserReceivesStartDate.set(user, startDate);
-        UserNCPower.set(user, ncPower);
-        tokenPower.set(user, _tokenPower);
-    }
-
-    function setUserDetails(
-        address user,
-        uint256 d,
-        uint256 ncPower,
-        uint256 startDate
-    ) external onlyOwner {
-        require(!UserReceiveRecord[user].get(d), "Already Receive in for the d");
-        UserReceiveRecord[user].set(d);
-        UserReceivesStartDate.set(user, startDate);
-        UserNCPower.set(user, ncPower);
-    }
-
-    function setTokenDetails(
-        address token,
-        uint256 power
-    ) external onlyOwner {
-        tokenPower.set(token, power);
-    }
 
 
     function setGUPA(address[] memory users, uint256[] memory powers) external onlyOwner {
@@ -916,7 +790,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
 
             totalPower += power;
 
-            if (hasRefer(user) && !_refersGood[getReferFirst(user)].contains(user)) {
+            if (hasRefer(user)) {
                 _refersGood[getReferFirst(user)].add(user);
             }
 
@@ -994,6 +868,10 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         return referArray;
     }
 
+    function set_updateDays(uint256 _days) external onlyOwner {
+        _updateDays = _days;
+    }
+
     function getReferId(address refer) public view returns (uint256) {
         return _referMss[refer]._referId;
     }
@@ -1010,8 +888,3 @@ contract TokenDistributor {
     }
 }
 
-contract TokenDBTCDistributor {
-    constructor(address _t) {
-        IERC20(_t).approve(msg.sender, uint256(~uint256(0)));
-    }
-}
