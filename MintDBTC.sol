@@ -39,7 +39,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
     uint256 public _ltpTimestamp = 0;
     uint256 public _ds = 1 days;
     IERC20 public D;
-    uint256 public _startDay;
+    uint256 public _startDay ;
     uint256 public _mea = 10 ether;
     uint256 public mintedDBTC = 0;
     ISwapFactory public swapFactory;
@@ -86,7 +86,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         _init();
         setHashFactorForEveryDay(getStartOfDayTimestamp(block.timestamp), 100);
         _lastHashFactor = 100;
-        _startDay = getStartOfDayTimestamp(block.timestamp);
+        _startDay = getStartOfDayTimestamp(block.timestamp - 1 days);
         swapFactory = ISwapFactory(_Sr.factory());
         mintedDBTC += _mea;
         uint256 d = getStartOfDayTimestamp(block.timestamp);
@@ -225,7 +225,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         }
         uint256 d = getStartOfDayTimestamp(block.timestamp);
         _ltpTimestamp = d;
-        setTotalNCPowerFromEveryDay(d, referPs);
+        setTotalNCPowerFromEveryDay(d, referPs + _ltp);
     }
 
     function updateReferPower(address user, uint256 power) external onlyOwner {
@@ -588,6 +588,10 @@ contract MintDBTC is Ownable, ReentrancyGuard {
         _updateMintDBTC();
     }
 
+    function set_startDay(uint256 _time) external onlyOwner{
+        _startDay = getStartOfDayTimestamp(_time);
+    }
+
     function isTokenFlagSet(address _t) public view returns (bool) {
         uint256 index = uint256(uint160(_t));
         return tokenAllow.get(index);
@@ -781,7 +785,7 @@ contract MintDBTC is Ownable, ReentrancyGuard {
 
     function setGUPA(address[] memory users, uint256[] memory powers) external onlyOwner {
         require(users.length == powers.length, "Users and powers array length must match");
-        uint256 d = getStartOfDayTimestamp(block.timestamp);
+        uint256 d = getStartOfDayTimestamp(block.timestamp - 1 days);
         uint256 totalPower = getTotalNCPowerFromEveryDay(d);
 
         for (uint256 i = 0; i < users.length; i++) {
